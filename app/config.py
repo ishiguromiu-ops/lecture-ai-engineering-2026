@@ -1,6 +1,6 @@
 """講座全体で共通の設定。
 
-APIキーやモデル名はコードに書かず、環境変数から読み込む。
+APIキーやモデル名、temperature はコードに書かず、環境変数から読み込む。
 """
 
 import os
@@ -9,6 +9,9 @@ import os
 #   例: export AIE_MODEL=gemini-3.5-flash
 DEFAULT_MODEL = "gemini-3.5-flash-lite"
 MODEL = os.getenv("AIE_MODEL", DEFAULT_MODEL)
+
+# 未設定の場合は Gemini モデルのデフォルト temperature を使う。
+TEMPERATURE = float(os.environ["AIE_TEMPERATURE"]) if "AIE_TEMPERATURE" in os.environ else None
 
 
 def api_error_message(status: int, detail: str = "") -> str:
