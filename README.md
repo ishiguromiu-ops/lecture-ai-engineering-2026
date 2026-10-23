@@ -38,7 +38,7 @@ uv run python -m app.ask "LoRAとは何ですか？"
 .devcontainer/   Codespaces の環境定義（Python 3.12、uv、Node.js。起動時に uv sync --frozen）
 .github/workflows/test.yml  PR ごとにテストを実行（fork では Actions タブで有効化が必要）
 app/
-  config.py      モデル名とAPIキーの読み込み
+  config.py      モデル名・temperature・APIキーの読み込み
   ask.py         第1回：LLMに質問する
   tools.py       第3回：エージェントのツール（用語集の検索など）
   agent.py       第3回：Pydantic AI の学習支援エージェント（第5回：--mcp で MCP 経由）
@@ -82,9 +82,11 @@ pyproject.toml / uv.lock  依存パッケージとその固定版
 ## モデルの切り替え
 
 既定モデルは `gemini-3.5-flash-lite` です。環境変数 `AIE_MODEL` で切り替えられます。
+temperature は環境変数 `AIE_TEMPERATURE` で指定できます。未設定の場合は Gemini モデルのデフォルト値を使います。
 
 ```bash
 AIE_MODEL=gemini-3.5-flash uv run python -m app.ask "LoRAとは何ですか？"
+AIE_TEMPERATURE=0.2 uv run python -m app.ask "LoRAとは何ですか？"
 ```
 
 無料枠には1分あたり・1日あたりのリクエスト上限があります。上限は [Gemini API のレート制限のページ](https://ai.google.dev/gemini-api/docs/rate-limits) で確認してください。
