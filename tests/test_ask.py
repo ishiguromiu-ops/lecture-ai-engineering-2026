@@ -1,7 +1,9 @@
+import csv
 import sys
 from types import SimpleNamespace
 
 from app import ask as ask_module
+from app.experiment_recorder import ExperimentRecorder
 
 
 class FakeModels:
@@ -137,6 +139,26 @@ def test_ask_reports_api_error_without_success_measurement(monkeypatch, capsys):
     assert history == []
 
 
+def test_ask_calls_measurement_recorder_after_api_timing(monkeypatch):
+    _fake_client(monkeypatch)
+    ticks = iter([5.0, 7.5])
+    monkeypatch.setattr(ask_module.time, "perf_counter", ticks.__next__)
+    measurements = []
+
+    def record(measurement):
+        measurements.append(measurement)
+        assert measurement.api_response_seconds == 2.5
+
+    ask_module.ask("質問", on_measurement=record)
+
+    assert len(measurements) == 1
+    assert measurements[0].status == "success"
+    assert measurements[0].question == "質問"
+    assert measurements[0].answer == "回答"
+    assert measurements[0].history_turns == 0
+    assert measurements[0].turn_number == 1
+
+
 def test_ask_sends_and_appends_history(monkeypatch):
     client = _fake_client(monkeypatch)
     history = []
@@ -255,6 +277,109 @@ def test_repl_history_commands_and_questions(monkeypatch, capsys):
     assert "[history] OFF（会話履歴を消去しました）" in output
     assert "turn=1" in output
     assert "turn=6" in output
+
+
+def test_repl_record_commands_create_new_experiments_and_reset_turn(
+    monkeypatch, tmp_path, capsys
+):
+    _fake_client(monkeypatch)
+    commands = iter(
+        [
+            "/record on",
+            "質問1",
+            "質問2",
+            "/record off",
+            "記録外の質問",
+            "/record on",
+            "新しい実験の質問",
+            "/record off",
+            "/exit",
+        ]
+    )
+    monkeypatch.setattr("builtins.input", lambda _: next(commands))
+
+    original_start = ExperimentRecorder.start
+    monkeypatch.setattr(
+        ask_module.ExperimentRecorder,
+        "start",
+        staticmethod(
+            lambda model, temperature: original_start(
+                model, temperature, tmp_path
+            )
+        ),
+    )
+
+    ask_module.run_repl(False)
+
+    files = list(tmp_path.glob("*.csv"))
+    assert len(files) == 2
+    recorded_rows = []
+    for path in files:
+        with path.open(encoding="utf-8", newline="") as csv_file:
+            recorded_rows.append(list(csv.DictReader(csv_file)))
+    first_rows = next(rows for rows in recorded_rows if rows[0]["question"] == "質問1")
+    second_rows = next(
+        rows
+        for rows in recorded_rows
+        if rows[0]["question"] == "新しい実験の質問"
+    )
+    assert [row["turn_number"] for row in first_rows] == ["1", "2"]
+    assert [row["question"] for row in first_rows] == ["質問1", "質問2"]
+    assert [row["turn_number"] for row in second_rows] == ["1"]
+    assert second_rows[0]["question"] == "新しい実験の質問"
+
+    output = capsys.readouterr().out
+    assert output.count("[record] ON id=") == 2
+    assert output.count("[record] OFF") == 2
+    assert "記録外の質問" not in "\n".join(row["question"] for row in first_rows + second_rows)
+
+
+def test_repl_records_api_errors_separately(monkeypatch, tmp_path, capsys):
+    client = _fake_client(monkeypatch)
+    client.models.failure = ask_module.errors.APIError(429, {"message": "quota"})
+    commands = iter(["/record on", "APIエラーになる質問", "/record off", "/exit"])
+    monkeypatch.setattr("builtins.input", lambda _: next(commands))
+    original_start = ExperimentRecorder.start
+    monkeypatch.setattr(
+        ask_module.ExperimentRecorder,
+        "start",
+        staticmethod(
+            lambda model, temperature: original_start(
+                model, temperature, tmp_path
+            )
+        ),
+    )
+
+    ask_module.run_repl(False)
+
+    csv_path = next(tmp_path.glob("*.csv"))
+    with csv_path.open(encoding="utf-8", newline="") as csv_file:
+        rows = list(csv.DictReader(csv_file))
+    assert len(rows) == 1
+    assert rows[0]["status"] == "error"
+    assert rows[0]["error_code"] == "429"
+    assert rows[0]["answer"] == ""
+    assert rows[0]["input_tokens"] == ""
+    assert "レート制限に達しました" in capsys.readouterr().out
+
+
+def test_repl_does_not_create_files_when_recording_is_off(monkeypatch, tmp_path):
+    _fake_client(monkeypatch)
+    commands = iter(["記録しない質問", "/exit"])
+    monkeypatch.setattr("builtins.input", lambda _: next(commands))
+
+    def unexpected_start(model, temperature):
+        raise AssertionError(
+            f"記録OFFでは記録ファイルを作成しない: {model} / {temperature}"
+        )
+
+    monkeypatch.setattr(
+        ask_module.ExperimentRecorder, "start", staticmethod(unexpected_start)
+    )
+
+    ask_module.run_repl(False)
+
+    assert list(tmp_path.iterdir()) == []
 
 
 def test_main_without_question_starts_repl(monkeypatch):

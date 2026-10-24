@@ -13,12 +13,15 @@
 import argparse
 import os
 import time
+from datetime import datetime
+from typing import Callable
 
 from google import genai
 from google.genai import errors
 from google.genai import types
 
 from app.config import MODEL, TEMPERATURE, api_error_message, get_api_key
+from app.experiment_recorder import ExperimentMeasurement, ExperimentRecorder
 
 # 講座に固有の質問。正しい答えは data/glossary.json の homework-levels にある
 DEFAULT_QUESTION = "AIE2026の講座の宿題にある「3レベル」とは何ですか？"
@@ -47,6 +50,7 @@ def ask(
     *,
     history_mode: bool | None = None,
     turn_number: int = 1,
+    on_measurement: Callable[[ExperimentMeasurement], None] | None = None,
 ) -> str:
     """質問を送り、成功時に測定値を表示してから履歴を更新する。"""
     client = genai.Client(api_key=get_api_key())
@@ -89,6 +93,26 @@ def ask(
             f"history_turns={turns_label} elapsed_seconds={elapsed_seconds:.3f} "
             f"error_code={_display_value(e.code)}"
         )
+        if on_measurement is not None:
+            on_measurement(
+                ExperimentMeasurement(
+                    status="error",
+                    model=MODEL,
+                    temperature=temperature_label,
+                    history_mode=history_label,
+                    history_turns=history_turns or 0,
+                    turn_number=turn_number,
+                    question=question,
+                    answer=None,
+                    input_tokens=None,
+                    output_tokens=None,
+                    thoughts_tokens=None,
+                    total_tokens=None,
+                    api_response_seconds=elapsed_seconds,
+                    executed_at=datetime.now().astimezone().isoformat(),
+                    error_code=e.code,
+                )
+            )
         raise
 
     elapsed_seconds = time.perf_counter() - started_at
@@ -126,62 +150,156 @@ def ask(
             ]
         )
 
+    if on_measurement is not None:
+        on_measurement(
+            ExperimentMeasurement(
+                status="success",
+                model=MODEL,
+                temperature=temperature_label,
+                history_mode=history_label,
+                history_turns=history_turns or 0,
+                turn_number=turn_number,
+                question=question,
+                answer=answer,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                thoughts_tokens=thoughts_tokens,
+                total_tokens=total_tokens,
+                api_response_seconds=elapsed_seconds,
+                executed_at=datetime.now().astimezone().isoformat(),
+            )
+        )
+
     return answer
 
 
 def run_repl(history_mode: bool) -> None:
     """対話入力を受け付け、現在のプロセス内だけ会話履歴を管理する。"""
     history: list[types.Content] = []
-    turn_number = 0
-    print("質問を入力してください。/history on|off、/clear、/exit が使えます。")
+    request_number = 0
+    recorder: ExperimentRecorder | None = None
+    record_turn_number = 0
+    print(
+        "質問を入力してください。/history on|off、/clear、"
+        "/record on|off、/exit が使えます。"
+    )
     print(f"[history] {'ON' if history_mode else 'OFF'}")
 
-    while True:
-        try:
-            question = input("質問> ").strip()
-        except (EOFError, KeyboardInterrupt):
-            print("\n終了します。")
+    def report_recording_failure() -> None:
+        nonlocal recorder
+        if recorder is None or recorder.failure is None:
             return
+        failed_recorder = recorder
+        recorder = None
+        print(f"記録に失敗したため停止します: {failed_recorder.failure}")
+        _close_recorder(failed_recorder)
 
-        if not question:
-            continue
+    try:
+        while True:
+            try:
+                question = input("質問> ").strip()
+            except (EOFError, KeyboardInterrupt):
+                print("\n終了します。")
+                return
 
-        command = question.lower()
-        if command == "/exit":
-            print("終了します。")
-            return
-        if command == "/clear":
-            history.clear()
-            print("会話履歴を初期化しました。")
-            continue
-        if command == "/history on":
-            history_mode = True
-            print("[history] ON")
-            continue
-        if command == "/history off":
-            history_mode = False
-            history.clear()
-            print("[history] OFF（会話履歴を消去しました）")
-            continue
-        if command.startswith("/history"):
-            print("使い方: /history on または /history off")
-            continue
+            if not question:
+                continue
 
-        turn_number += 1
-        try:
-            answer = ask(
-                question,
-                history if history_mode else None,
-                history_mode=history_mode,
-                turn_number=turn_number,
-            )
-        except errors.APIError as e:
-            print(api_error_message(e.code, e.message))
-            continue
-        except RuntimeError as e:
-            print(f"応答エラー: {e}")
-            continue
-        print(answer)
+            command = question.lower()
+            if command == "/exit":
+                print("終了します。")
+                return
+            if command == "/clear":
+                history.clear()
+                print("会話履歴を初期化しました。")
+                continue
+            if command == "/history on":
+                history_mode = True
+                print("[history] ON")
+                continue
+            if command == "/history off":
+                history_mode = False
+                history.clear()
+                print("[history] OFF（会話履歴を消去しました）")
+                continue
+            if command.startswith("/history"):
+                print("使い方: /history on または /history off")
+                continue
+            if command == "/record on":
+                if recorder is not None:
+                    print(
+                        "[record] すでに記録中です: "
+                        f"{recorder.csv_path} / {recorder.txt_path}"
+                    )
+                    continue
+                temperature_label = (
+                    str(TEMPERATURE) if TEMPERATURE is not None else "default"
+                )
+                try:
+                    recorder = ExperimentRecorder.start(MODEL, temperature_label)
+                except OSError as e:
+                    print(f"記録ファイルを作成できませんでした: {e}")
+                    continue
+                record_turn_number = 0
+                print(f"[record] ON id={recorder.experiment_id}")
+                print(f"[record] CSV: {recorder.csv_path}")
+                print(f"[record] TXT: {recorder.txt_path}")
+                continue
+            if command == "/record off":
+                if recorder is None:
+                    print("[record] すでに停止しています。")
+                    continue
+                stopped_recorder = recorder
+                recorder = None
+                _stop_recorder(stopped_recorder)
+                continue
+            if command.startswith("/record"):
+                print("使い方: /record on または /record off")
+                continue
+
+            request_number += 1
+            if recorder is not None:
+                record_turn_number += 1
+                turn_number = record_turn_number
+                measurement_callback = recorder.record
+            else:
+                turn_number = request_number
+                measurement_callback = None
+            try:
+                answer = ask(
+                    question,
+                    history if history_mode else None,
+                    history_mode=history_mode,
+                    turn_number=turn_number,
+                    on_measurement=measurement_callback,
+                )
+            except errors.APIError as e:
+                print(api_error_message(e.code, e.message))
+                report_recording_failure()
+                continue
+            except RuntimeError as e:
+                print(f"応答エラー: {e}")
+                report_recording_failure()
+                continue
+            report_recording_failure()
+            print(answer)
+    finally:
+        if recorder is not None:
+            _stop_recorder(recorder)
+
+
+def _close_recorder(recorder: ExperimentRecorder) -> None:
+    try:
+        recorder.close()
+    except OSError as error:
+        print(f"記録ファイルを閉じられませんでした: {error}")
+
+
+def _stop_recorder(recorder: ExperimentRecorder) -> None:
+    _close_recorder(recorder)
+    print("[record] OFF")
+    print(f"[record] CSV: {recorder.csv_path}")
+    print(f"[record] TXT: {recorder.txt_path}")
 
 
 def main() -> None:
