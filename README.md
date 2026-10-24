@@ -39,7 +39,7 @@ uv run python -m app.ask "LoRAとは何ですか？"
 .github/workflows/test.yml  PR ごとにテストを実行（fork では Actions タブで有効化が必要）
 app/
   config.py      モデル名・temperature・APIキーの読み込み
-  ask.py         第1回：LLMに質問する
+  ask.py         第1回：LLMへの単発質問・対話と会話履歴
   tools.py       第3回：エージェントのツール（用語集の検索など）
   agent.py       第3回：Pydantic AI の学習支援エージェント（第5回：--mcp で MCP 経由）
   mcp_server.py  第5回：用語集を公開する MCP サーバー
@@ -88,5 +88,21 @@ temperature は環境変数 `AIE_TEMPERATURE` で指定できます。未設定�
 AIE_MODEL=gemini-3.5-flash uv run python -m app.ask "LoRAとは何ですか？"
 AIE_TEMPERATURE=0.2 uv run python -m app.ask "LoRAとは何ですか？"
 ```
+
+引数を省略すると対話形式で起動します。`AIE_HISTORY_MODE=ON` で履歴を有効にすると、同じ起動中の過去の質問と回答を次の質問に含めます。履歴はメモリ上だけに保持され、終了すると破棄されます。既定は `OFF` です。
+
+```bash
+AIE_HISTORY_MODE=ON uv run python -m app.ask
+uv run python -m app.ask
+```
+
+対話中は次のコマンドで操作できます。`/history off` にすると履歴を消去し、`/history on` で再度有効にすると新しい履歴から始まります。`/clear` はモードを維持したまま履歴だけを消去します。
+
+| コマンド | 動作 |
+|---|---|
+| `/history on` | 履歴を有効にする |
+| `/history off` | 履歴を無効にして、保持中の履歴を消去する |
+| `/clear` | 履歴を消去する（モードは維持） |
+| `/exit` | 対話を終了する |
 
 無料枠には1分あたり・1日あたりのリクエスト上限があります。上限は [Gemini API のレート制限のページ](https://ai.google.dev/gemini-api/docs/rate-limits) で確認してください。
