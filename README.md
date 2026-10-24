@@ -105,4 +105,8 @@ uv run python -m app.ask
 | `/clear` | 履歴を消去する（モードは維持） |
 | `/exit` | 対話を終了する |
 
+質問ごとに、Gemini APIの呼び出し時間とトークン数を `[measurement]` 行に表示します。モデル、temperature、履歴モード、REPL内の呼び出し番号も同じ行に出るため、履歴ON/OFFの結果を照合できます。`history_turns` は履歴ON時にAPIへ含めた過去の会話ターン数です。取得できないトークン数は「不明」と表示し、0とは区別します。
+
+APIエラー時は `status=error` とエラーコードを表示します。失敗した呼び出しは成功時のトークン測定行には含めず、履歴にも追加しません。単発質問ではターン番号は1です。
+
 無料枠には1分あたり・1日あたりのリクエスト上限があります。上限は [Gemini API のレート制限のページ](https://ai.google.dev/gemini-api/docs/rate-limits) で確認してください。

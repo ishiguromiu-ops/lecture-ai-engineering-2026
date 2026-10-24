@@ -12,6 +12,7 @@
 
 import argparse
 import os
+import time
 
 from google import genai
 from google.genai import errors
@@ -21,6 +22,11 @@ from app.config import MODEL, TEMPERATURE, api_error_message, get_api_key
 
 # 講座に固有の質問。正しい答えは data/glossary.json の homework-levels にある
 DEFAULT_QUESTION = "AIE2026の講座の宿題にある「3レベル」とは何ですか？"
+
+
+def _display_value(value: int | None) -> str:
+    """数値が取得できない場合は「不明」と表示する。"""
+    return str(value) if value is not None else "不明"
 
 
 def get_initial_history_mode() -> bool:
@@ -35,9 +41,23 @@ def get_initial_history_mode() -> bool:
     return mode == "ON"
 
 
-def ask(question: str, history: list[types.Content] | None = None) -> str:
-    """質問を送り、成功した場合だけ質問と回答を会話履歴に追加する。"""
+def ask(
+    question: str,
+    history: list[types.Content] | None = None,
+    *,
+    history_mode: bool | None = None,
+    turn_number: int = 1,
+) -> str:
+    """質問を送り、成功時に測定値を表示してから履歴を更新する。"""
     client = genai.Client(api_key=get_api_key())
+    if history_mode is None:
+        history_mode = history is not None
+
+    history_turns = (
+        len(history or []) // 2
+        if history_mode
+        else None
+    )
     if history is None:
         contents: str | list[types.Content] = question
     else:
@@ -47,24 +67,53 @@ def ask(question: str, history: list[types.Content] | None = None) -> str:
         )
         contents = [*history, user_message]
 
-    if TEMPERATURE is None:
-        response = client.models.generate_content(model=MODEL, contents=contents)
-    else:
-        response = client.models.generate_content(
-            model=MODEL,
-            contents=contents,
-            config=types.GenerateContentConfig(temperature=TEMPERATURE),
+    started_at = time.perf_counter()
+    try:
+        if TEMPERATURE is None:
+            response = client.models.generate_content(model=MODEL, contents=contents)
+        else:
+            response = client.models.generate_content(
+                model=MODEL,
+                contents=contents,
+                config=types.GenerateContentConfig(temperature=TEMPERATURE),
+            )
+    except errors.APIError as e:
+        elapsed_seconds = time.perf_counter() - started_at
+        history_label = "ON" if history_mode else "OFF"
+        turns_label = str(history_turns) if history_turns is not None else "対象外"
+        temperature_label = str(TEMPERATURE) if TEMPERATURE is not None else "default"
+        print(
+            "[measurement] status=error "
+            f"model={MODEL} temperature={temperature_label} "
+            f"history_mode={history_label} turn={turn_number} "
+            f"history_turns={turns_label} elapsed_seconds={elapsed_seconds:.3f} "
+            f"error_code={_display_value(e.code)}"
         )
+        raise
 
+    elapsed_seconds = time.perf_counter() - started_at
     answer = response.text
     if answer is None:
         raise RuntimeError("モデルからテキスト応答がありませんでした。")
 
     usage = response.usage_metadata
-    input_tokens = usage.prompt_token_count if usage else None
-    output_tokens = usage.candidates_token_count if usage else None
-    print(f"[tokens] input={input_tokens if input_tokens is not None else '不明'} "
-          f"output={output_tokens if output_tokens is not None else '不明'}")
+    input_tokens = getattr(usage, "prompt_token_count", None)
+    output_tokens = getattr(usage, "candidates_token_count", None)
+    thoughts_tokens = getattr(usage, "thoughts_token_count", None)
+    total_tokens = getattr(usage, "total_token_count", None)
+    history_label = "ON" if history_mode else "OFF"
+    turns_label = str(history_turns) if history_turns is not None else "対象外"
+    temperature_label = str(TEMPERATURE) if TEMPERATURE is not None else "default"
+    print(
+        "[measurement] status=success "
+        f"model={MODEL} temperature={temperature_label} "
+        f"history_mode={history_label} turn={turn_number} "
+        f"history_turns={turns_label} elapsed_seconds={elapsed_seconds:.3f} "
+        f"input_tokens={_display_value(input_tokens)} "
+        f"output_tokens={_display_value(output_tokens)} "
+        f"thoughts_tokens={_display_value(thoughts_tokens)} "
+        f"total_tokens={_display_value(total_tokens)}"
+    )
 
     if history is not None:
         history.extend(
@@ -83,6 +132,7 @@ def ask(question: str, history: list[types.Content] | None = None) -> str:
 def run_repl(history_mode: bool) -> None:
     """対話入力を受け付け、現在のプロセス内だけ会話履歴を管理する。"""
     history: list[types.Content] = []
+    turn_number = 0
     print("質問を入力してください。/history on|off、/clear、/exit が使えます。")
     print(f"[history] {'ON' if history_mode else 'OFF'}")
 
@@ -117,8 +167,14 @@ def run_repl(history_mode: bool) -> None:
             print("使い方: /history on または /history off")
             continue
 
+        turn_number += 1
         try:
-            answer = ask(question, history if history_mode else None)
+            answer = ask(
+                question,
+                history if history_mode else None,
+                history_mode=history_mode,
+                turn_number=turn_number,
+            )
         except errors.APIError as e:
             print(api_error_message(e.code, e.message))
             continue
@@ -150,7 +206,7 @@ def main() -> None:
 
     print(f"[質問] {args.question}\n")
     try:
-        print(ask(args.question))
+        print(ask(args.question, history_mode=history_mode, turn_number=1))
     except errors.APIError as e:
         print(api_error_message(e.code, e.message))
         raise SystemExit(1)
