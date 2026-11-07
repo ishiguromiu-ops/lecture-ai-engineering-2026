@@ -9,7 +9,8 @@ from pydantic_ai import DeferredToolRequests
 from pydantic_ai.messages import ToolCallPart, ToolReturnPart
 from pydantic_ai.models.test import TestModel
 
-from app.agent import agent
+from app import tools
+from app.agent import agent, resume_deferred_tools
 
 BASE_TOOLS = {"search_glossary", "get_lecture_summary"}
 
@@ -40,3 +41,39 @@ def test_glossary_result_reaches_the_model():
         result = agent.run_sync("RAGとは？")
     returns = _parts(result, ToolReturnPart)
     assert returns and returns[0].tool_name == "search_glossary"
+
+
+def test_save_learning_log_runs_after_approval(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(tools, "LEARNING_LOG_DIR", tmp_path)
+    monkeypatch.setattr("builtins.input", lambda _: "y")
+    model = TestModel()
+
+    pending = agent.run_sync("学んだ内容を保存して", model=model)
+    assert isinstance(pending.output, DeferredToolRequests)
+    call = next(
+        call for call in pending.output.approvals if call.tool_name == "save_learning_log"
+    )
+    expected_content = call.args_as_dict()["content"]
+
+    result = resume_deferred_tools(agent, pending, model)
+
+    saved_files = list(tmp_path.glob("*.md"))
+    assert len(saved_files) == 1
+    assert saved_files[0].read_text(encoding="utf-8") == expected_content
+    assert isinstance(result.output, str)
+    assert expected_content in capsys.readouterr().out
+
+
+def test_save_learning_log_is_not_run_after_rejection(tmp_path, monkeypatch):
+    monkeypatch.setattr(tools, "LEARNING_LOG_DIR", tmp_path)
+    monkeypatch.setattr("builtins.input", lambda _: "n")
+    model = TestModel()
+
+    pending = agent.run_sync("学んだ内容を保存して", model=model)
+    assert isinstance(pending.output, DeferredToolRequests)
+
+    result = resume_deferred_tools(agent, pending, model)
+
+    assert list(tmp_path.glob("*.md")) == []
+    assert isinstance(result.output, str)
+    assert "The tool call was denied." in result.output
