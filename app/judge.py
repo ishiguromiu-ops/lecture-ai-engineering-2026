@@ -52,10 +52,10 @@ Verdict = Literal["pass", "fail", "unsure"]
 
 
 class CriterionVerdict(BaseModel):
-    """1 つの基準に対する判定。verdict を先に決めさせてから reason を書かせる （判定→理由の順）。"""
+    """1 つの基準に対する判定。verdict を先に決めさせてから reason を書かせる （理由→判定の順）。"""
 
-    verdict: Verdict = Field(description="pass / fail / unsure のどれか")
     reason: str = Field(description="判定の理由。日本語で 1〜2 文")
+    verdict: Verdict = Field(description="pass / fail / unsure のどれか")
 
 
 class JudgeResult(BaseModel):
@@ -117,8 +117,9 @@ def judge_prompt(case: dict) -> str:
 def build_judge(model, rubric: str) -> Agent:
     instructions = rubric + (
         "\n\n# 出力の形式\n"
-        "4 つの基準（grounding, scope, hint, clarity）それぞれについて、まずverdict を pass / fail / unsure のどれかにし、"
-        "そのあとでreason（理由）を書いてください。"
+        "4 つの基準（grounding, scope, hint, clarity）それぞれについて、"
+        "まずreason（理由）を書いてください。"
+        "そのあとでverdict を pass / fail / unsure のどれかにしてください。"
     )
     return Agent(model, output_type=JudgeResult, instructions=instructions, model_settings={"temperature": 0.0})
 
@@ -301,7 +302,7 @@ def compare_labels(a: dict[str, dict], b: dict[str, dict], name_a: str, name_b: 
 
 
 # ---------------------------------------------------------------- 回答の生成（宿題・実装）
-def generate_answers(cases: list[dict], wait: float = 1.0) -> list[dict]:
+def generate_answers(cases: list[dict], wait: float = 15.0) -> list[dict]:
     """評価セットの各質問を自分のエージェント（app.agent）に投げ、回答を埋める。"""
     from app.agent import agent, build_model
 
