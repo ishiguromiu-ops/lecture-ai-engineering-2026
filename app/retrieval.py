@@ -5,6 +5,7 @@ import json
 import math
 import re
 import sqlite3
+import struct
 from contextlib import contextmanager
 from collections import defaultdict, deque
 from pathlib import Path
@@ -16,7 +17,7 @@ import sqlite_vec
 
 from app.config import (
     EMBEDDING_DIMENSIONS, EMBEDDING_MAX_TOKENS, EMBEDDING_MODEL,
-    RAG_DB, RAG_DOCUMENT_IDS, RAG_SOURCE, RAG_TOP_K, RAG_TREE, get_api_key,
+    RAG_DB, RAG_DOCUMENT_IDS, RAG_SOURCE, RAG_TOP_K, RAG_MMR_ENABLED, RAG_MMR_FETCH_K, RAG_MMR_LAMBDA,RAG_TREE, get_api_key,
     RAG_GRAPH, GRAPH_START_K, GRAPH_HOPS, GRAPH_MAX_RESULTS,
 )
 
@@ -123,20 +124,106 @@ def open_index(path: Path):
     finally:
         db.close()
 
+def select_mmr(
+    candidates: list[dict],
+    top_k: int,
+    lambda_: float,
+) -> list[dict]:
+    """質問との関連性と、取得ページの多様性を考慮して選定する。"""
+
+    if not 0 <= lambda_ <= 1:
+        raise ValueError("MMRのlambdaは0〜1で指定してください。")
+
+    if not candidates or top_k <= 0:
+        return []
+
+    # DBから取得したfloat32のバイナリを数値の列に変換する
+    vectors = [
+        normalized_vector(
+            list(struct.unpack(
+                f"={len(row['embedding']) // 4}f",
+                row["embedding"],
+            ))
+        )
+        for row in candidates
+    ]
+
+    # コサイン距離をコサイン類似度に変換する
+    relevance = [
+        1.0 - row["distance"]
+        for row in candidates
+    ]
+
+    # 最も質問に関連するページを最初に選択する
+    selected = [0]
+    remaining = list(range(1, len(candidates)))
+
+    def mmr_score(i: int) -> float:
+        # 選択済みページとの類似度の最大値
+        redundancy = max(
+            sum(a * b for a, b in zip(vectors[i], vectors[j]))
+            for j in selected
+        )
+
+        return (
+            lambda_ * relevance[i]
+            - (1.0 - lambda_) * redundancy
+        )
+
+    # 関連性が高く、選択済みページとの重複が少ない候補を選ぶ
+    while remaining and len(selected) < top_k:
+        best = max(remaining, key=mmr_score)
+        selected.append(best)
+        remaining.remove(best)
+
+    # ベクトル自体はLLMに渡さない
+    return [
+        {
+            key: value
+            for key, value in candidates[i].items()
+            if key != "embedding"
+        }
+        for i in selected
+    ]
+    
 
 def search(query: str) -> list[dict]:
-    """質問を埋め込み、近いページを最大RAG_TOP_K件返す。"""
+    """通常のベクトル検索、またはMMRによる検索を行う。"""
     if not isinstance(query, str) or not query.strip():
         raise ValueError("検索語が空です。")
     with open_index(RAG_DB) as db:
         vector = embed_text(query.strip(), "RETRIEVAL_QUERY")
+        # MMRを使う場合は候補を多めに取得する
+        fetch_k = (
+            max(RAG_MMR_FETCH_K, RAG_TOP_K)
+            if RAG_MMR_ENABLED
+            else RAG_TOP_K
+        )
         rows = db.execute("""
-            SELECT page_id, document_id, lecture, document_title, section, title, page, content,
+            SELECT page_id, document_id, lecture, document_title, section, title, page, content, embedding,
                    vec_distance_cosine(embedding, ?) AS distance
             FROM chunks ORDER BY distance, page_id LIMIT ?
-        """, (sqlite_vec.serialize_float32(vector), RAG_TOP_K))
-        return [dict(row) for row in rows]
+        """, (sqlite_vec.serialize_float32(vector), fetch_k))
+        candidates = [dict(row) for row in rows]
 
+    # MMRによる再選定
+        if RAG_MMR_ENABLED:
+            return select_mmr(
+                candidates,
+                RAG_TOP_K,
+                RAG_MMR_LAMBDA,
+            )
+        
+   # 通常のベクトル検索
+    return [
+        {
+            key: value
+            for key, value in row.items()
+            if key != "embedding"
+        }
+        for row in candidates
+    ]
+    
 
 def search_graph(query: str) -> dict:
     """ベクトル検索を入口に、前後ページと共通用語で候補を広げる。"""
