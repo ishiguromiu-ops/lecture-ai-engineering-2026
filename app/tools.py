@@ -126,3 +126,77 @@ def search_graph(query: str) -> str:
         return json.dumps({"error": str(e)}, ensure_ascii=False)
     except APIError as e:
         return json.dumps({"error": api_error_message(e.code)}, ensure_ascii=False)
+
+
+def search_tree_vector_materials(query: str) -> str:
+    """Treeで講義の章構成を取得し、各章からVector検索で
+    関連するページの本文を2件ずつ取得する。
+
+    網羅的な質問に使用する。
+    """
+    import sqlite3
+    from google.genai.errors import APIError
+    from app.retrieval import search_tree_vector
+
+    try:
+        result = search_tree_vector(query,document_id=None,per_section=2)
+        return json.dumps(result, ensure_ascii=False)
+    except (ValueError, OSError, sqlite3.Error) as e:
+        return json.dumps({"error": str(e)}, ensure_ascii=False)
+    except APIError as e:
+        return json.dumps(
+            {"error": api_error_message(e.code)},
+            ensure_ascii=False,
+        )
+
+
+def search_tree_vector_rerank_materials(query: str) -> str:
+    """TreeとVectorで各章の候補ページを取得し、
+    LLMがページタイトルを評価して各章2ページずつ選び、
+    選択したページの本文を返す。
+
+    網羅的な質問に使用する。
+    """
+    import sqlite3
+    from google.genai.errors import APIError
+    from app.retrieval import search_tree_vector_rerank
+
+    try:
+        result = search_tree_vector_rerank(
+            query,
+            document_id="lec02-main",
+            per_section=2,
+            candidate_per_section=5,
+        )
+        return json.dumps(result, ensure_ascii=False)
+    except (ValueError, OSError, sqlite3.Error) as e:
+        return json.dumps({"error": str(e)}, ensure_ascii=False)
+    except APIError as e:
+        return json.dumps(
+            {"error": api_error_message(e.code)},
+            ensure_ascii=False,
+        )
+
+
+def search_vector_tree_materials(query: str) -> str:
+    """第1〜3回の本講義資料を検索し、関連ページの本文・タイトル・ページ番号を返す。queryに調べたい内容を指定する。検索結果はTreeの章構造を用いて分散選択し、所属章と周辺ページのタイトルを補足する。"""
+    import sqlite3
+    from google.genai.errors import APIError
+    from app.retrieval import search_vector_tree
+
+    try:
+        result = search_vector_tree(query)
+        return json.dumps(result, ensure_ascii=False)
+
+    except (ValueError, OSError, sqlite3.Error) as e:
+        return json.dumps(
+            {"error": str(e)},
+            ensure_ascii=False,
+        )
+
+    except APIError as e:
+        return json.dumps(
+            {"error": api_error_message(e)},
+            ensure_ascii=False,
+        )
+
