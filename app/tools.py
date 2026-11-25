@@ -208,8 +208,10 @@ def make_quiz(lecture: int) -> str:
     """
     terms = [entry for entry in load_glossary() if entry["lecture"] == lecture]
     if not terms:
-        return f"第{lecture}回の用語が見つかりませんでした。"
-
+        return (
+            f"第{lecture}回の用語が用語集に登録されていないため、確認問題は作成できません。"
+            "用語が登録されている別の回を指定してください。"
+        )
     term = random.choice(terms)
     return json.dumps(
         {
