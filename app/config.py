@@ -11,6 +11,11 @@ from pathlib import Path
 DEFAULT_MODEL = "gemini-3.5-flash-lite"
 MODEL = os.getenv("AIE_MODEL", DEFAULT_MODEL)
 
+# TEMPERATUREの切り替えを可能にする（環境変数 AIE_TEMPERATURE を設定すると切り替えられる）
+TEMPERATURE = os.getenv("AIE_TEMPERATURE")
+if TEMPERATURE is not None:
+    TEMPERATURE = float(TEMPERATURE)
+
 # 第5回: 1ページを1チャンクとして検索する。索引はscripts/build_rag_index.pyで作成する。
 ROOT = Path(__file__).resolve().parent.parent
 RAG_SOURCE = ROOT / "data/rag_data/lectures.json"
