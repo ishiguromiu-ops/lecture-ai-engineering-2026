@@ -16,6 +16,7 @@
 
 <!-- 基礎・実装・発展のどれか1つに取り組めば完了です。 -->
 
+### 基礎
 - 取り組んだレベル：基礎
 - やったこと：`app/mcp_server.py`に`server.tool()(tools.get_lecture_summary)`を追加し、講義の要点を取得する関数をMCPツールとして公開した。
 - 結果：
@@ -27,6 +28,7 @@
         1. 他者が作成したツールも共通の仕組みで接続でき、外部の便利な機能を簡単に利用できる。
         2. 自分が作成したツールを他のMCP対応アプリケーションでも再利用・共有しやすくなる。
 
+### 実装
 - 取り組んだレベル：実装
 - やったこと：
     1. 第3回で作成した`make_quiz`関数を、`app/mcp_server.py`に`server.tool()(tools.make_quiz)`を追加してMCPツールとして公開した。
@@ -61,3 +63,101 @@
         - 今回のように、指定された回の用語が未登録であることは想定内の状況なので、`return`で理由と対処方法を案内する方が適切だと考えた。
         - 一方、データの破損など、プログラムが正常に処理できない想定外の異常は、例外として扱う方が適切だと理解した。
         - 想定内の「データがない」と、想定外の「処理が失敗した」を区別してツールを設計することが重要だと分かった。
+
+### 発展
+- 取り組んだレベル：発展
+- やったこと：
+    1. MCPクライアントとしてCodexを選び、MCPサーバーの設定方法を公式ドキュメントで調査した。演習で使用した`app/mcp_servers.json`との違いを比較した。
+    2. CodespacesにCodex CLIをインストールし、以下のコマンドで演習用の`glossary`サーバーを登録した。
+
+       ```bash
+       codex mcp add glossary -- uv run python -m app.mcp_server
+       ```
+
+    3. さらに、Windows版Codexアプリをインストールした。演習リポジトリをWindowsにクローンし、Pythonの実行環境を構築した上で、Windows側の`config.toml`にも`glossary`サーバーを登録した。
+    4. Codex CLIとWindows版Codexアプリのそれぞれから、MCP経由で`make_quiz`を呼び出せるか検証した。
+
+- 結果：
+    1. CodexのMCP設定方法と演習のJSONファイルの比較
+
+       | 比較項目 | CodexのTOML | 演習のJSON |
+       |---|---|---|
+       | 設定を書く場所 | ユーザー単位の場合は`~/.codex/config.toml`、プロジェクト単位の場合は`.codex/config.toml`。`codex mcp add`コマンドでも登録できる。 | 講義用エージェントの`app/mcp_servers.json` |
+       | コマンドで起動する書き方 | `[mcp_servers.サーバー名]`の下に`command`と`args`を指定する。 | サーバー名をキーとするオブジェクト内に`command`と`args`を指定する。 |
+       | URLで接続する書き方 | `[mcp_servers.サーバー名]`の下に`url`を指定する。 | サーバー名をキーとするオブジェクト内に`url`を指定する。 |
+       | 有効になる範囲 | ユーザー単位またはプロジェクト単位で設定可能。プロジェクト設定は信頼済みプロジェクトで有効になる。 | 演習用エージェントが参照する設定として有効になる。 |
+
+       設定例は以下のとおり。
+       - Codex（TOML）
+
+       ```toml
+       [mcp_servers.glossary]
+       command = "uv"
+       args = ["run", "python", "-m", "app.mcp_server"]
+
+       [mcp_servers.aws]
+       url = "https://knowledge-mcp.global.api.aws"
+       ```
+
+       - 演習用エージェント（JSON）
+
+       ```json
+       {
+         "glossary": {
+           "command": "uv",
+           "args": ["run", "python", "-m", "app.mcp_server"]
+         },
+         "aws": {
+           "url": "https://knowledge-mcp.global.api.aws"
+         }
+       }
+       ```
+
+    2. Codespaces上のCodex CLIでの動作確認
+
+       - `codex mcp add glossary -- uv run python -m app.mcp_server`を実行して、`glossary`サーバーを登録した。
+       - `codex mcp list`で登録を確認したところ、`glossary`が`enabled`と表示された。
+       - Codespaces内の`~/.codex/config.toml`には、以下の設定が追加されていた。
+
+         ```toml
+         [mcp_servers.glossary]
+         command = "uv"
+         args = ["run", "python", "-m", "app.mcp_server"]
+         ```
+
+       - Codex CLIから第2回の確認問題を1問作成するよう依頼したところ、`glossary.make_quiz`が呼び出され、「QLoRA」に関する問題が出題された。
+       - これにより、講義のGeminiエージェントで利用していたMCPサーバーを、Codex CLIからも利用できることを確認した。
+
+    3. Windows版Codexアプリでの動作確認
+
+       - Windows PCに演習リポジトリをクローンし、`uv sync`でPythonの実行環境を構築した。
+       - Windows上でも`make_quiz`関数を直接実行できることを確認した。
+       - Windows側の`~/.codex/config.toml`に、`glossary`サーバーの起動設定を追記した。
+       - 当初は`command = "uv"`としていたため、Codexアプリからサーバーを起動できず、`MCP startup failed: program not found`というエラーが発生した。
+       - そこで、`command`に`uv.exe`の絶対パスを指定し、Codexアプリを完全終了して再起動した。その結果、`make_quiz`がMCP経由で正常に呼び出され、「LoRA」に関する問題が出題された。
+       - Windows版では、uv.exeの絶対パスと--directoryによる演習リポジトリの指定を行った。Codespacesとは異なり、Windows側の実行環境に合わせて設定を調整することで接続できた。
+
+- 気づいたこと・疑問：
+    1. MCPサーバーの設定形式の共通点
+       - 演習のJSONとCodexのTOMLでは、ファイル形式や階層の書き方は異なるものの、接続に必要な基本情報は共通している。
+       - ローカルの`glossary`サーバーは`command`と`args`で起動方法を指定し、AWSのMCPサーバーは`url`で接続先を指定する。この考え方は演習とCodexで共通している。
+
+    2. Codexの特徴＝設定の適用範囲や接続方法の柔軟な管理
+       - 演習の`app/mcp_servers.json`は講義用エージェントが参照する設定であり、ユーザー単位・プロジェクト単位を切り替える仕組みは設けられていないのに対し、Codexではユーザー単位とプロジェクト単位の設定を使い分けられる。
+       - また、環境変数、認証情報、HTTPヘッダー、タイムアウト、利用可能なツールの制限など、演習よりも多くの設定項目が用意されている。さまざまな環境やセキュリティ要件に対応するためだと考えた。
+
+    3. MCPの共通化と実行環境の共通化は別である
+       - Codex CLIとWindows版Codexアプリは、同じCodexの設定ファイルを参照する環境であれば、MCP設定を共有できるが、今回は、Codex CLIをCodespaces上で、デスクトップアプリをWindows上で利用したため、設定ファイルが別々に存在していた。
+       - そのため、Codespacesでは`codex mcp add`コマンドで、Windowsでは`config.toml`への直接追記によって、それぞれMCPサーバーを登録する必要があった。
+       - さらに、Windows版では、`uv`の実行ファイルを見つけられずにエラーが発生した。MCPという共通規格を使っていても、サーバーを動かす環境に応じた設定や調整は必要だと分かった。
+
+    4. 自作MCPツールの再利用性
+       - 第3回で作成した`make_quiz`関数を変更することなく、講義のGeminiエージェント、Codespaces上のCodex CLI、Windows版Codexアプリのいずれからも利用できた。
+       - MCPを使うことで、AIクライアントごとにツールの処理を作り直さずに済むことを実感した。
+
+- 調べた日付と参照した公式ドキュメント：
+    - 調査日：2026年11月27日
+    - 参照した公式ドキュメント：
+        - CodexのMCP設定：https://learn.chatgpt.com/ja-JP/docs/extend/mcp
+        - Codexの構成リファレンス：https://learn.chatgpt.com/ja-JP/docs/config-file/config-reference
+        - Codexの設定の基本：https://learn.chatgpt.com/ja-JP/docs/config-file/config-basic
